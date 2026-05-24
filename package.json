@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "@google/genai": "latest"
+    "@google/genai": "latest",
+    "@modelcontextprotocol/sdk": "latest"
   }
 }
