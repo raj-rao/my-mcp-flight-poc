@@ -1,7 +1,26 @@
-import { GoogleGenAI, mcpToTool } from '@google/genai';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { GoogleGenAI } from '@google/genai';
 import crypto from 'crypto';
+
+// 1. Static Tool Schema Declaration
+// Bypasses resource-heavy SSE discovery handshakes to ensure execution completes under 10 seconds
+const salesforceFlightTool = {
+  functionDeclarations: [
+    {
+      name: "GetPastOrUpcomingTripsAction",
+      description: "Fetches flight bookings from the Salesforce custom object database based on intent parameters.",
+      parameters: {
+        type: "OBJECT",
+        properties: {
+          dateFilter: {
+            type: "STRING",
+            description: "Alphanumeric filter keyword mapping the target timeline execution criteria window. Accepted values: TODAY, NEXT_MONTH, WEEKEND."
+          }
+        },
+        required: ["dateFilter"]
+      }
+    }
+  ]
+};
 
 /**
  * Automatically generates a secure JWT assertion and exchanges it 
@@ -11,41 +30,30 @@ async function getSalesforceUserToken() {
   const consumerKey = process.env.SF_CONSUMER_KEY;
   const audience = 'https://login.salesforce.com';
   
-  // CRITICAL: Ensure this matches the exact username listed in your active Org farm instance profile!
-  const username = 'rajrao104.e195a8a1a260@agentforce.com'; 
+  // Ensure this matches your login username string inside your Salesforce Org farm profile
+  const username = 'rajrao104-3972@dev.org'; 
 
-  // 1. Build the base64url encoded JWT structure
   const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
   const claimSet = Buffer.from(JSON.stringify({
     iss: consumerKey,
     sub: username,
     aud: audience,
-    exp: Math.floor(Date.now() / 1000) + 180 // Token lifespan: 3 minutes
+    exp: Math.floor(Date.now() / 1000) + 180 
   })).toString('base64url');
 
   const signInput = `${header}.${claimSet}`;
-  
-  // Clean up any newline compression artifacts injected by the Vercel dashboard environment text box
   const privateKey = process.env.SF_PRIVATE_KEY.replace(/\\n/g, '\n'); 
-  
-  // 2. Sign the payload using your local OpenSSL RSA private key asset
   const signer = crypto.createSign('RSA-SHA256');
   signer.update(signInput);
   const signature = signer.sign(privateKey, 'base64url');
 
-  const assertionToken = `${signInput}.${signature}`;
-
   const params = new URLSearchParams({
     grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-    assertion: assertionToken
+    assertion: `${signInput}.${signature}`
   });
 
-  // Sanitize the subdomain prefix string safely
-  let domain = process.env.SF_DOMAIN.trim();
-  domain = domain.replace(/^https?:\/\//, ''); 
-  domain = domain.replace(/\.my\.salesforce-setup\.com\/?$/, '');
+  let domain = process.env.SF_DOMAIN.trim().replace(/^https?:\/\//, '').replace(/\.my\.salesforce-setup\.com\/?$/, '');
 
-  // 3. Request the access token from your specific scratch org pod destination
   const response = await fetch(`https://${domain}.my.salesforce-setup.com/services/oauth2/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -53,8 +61,7 @@ async function getSalesforceUserToken() {
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Salesforce JWT Gateway Handshake Failure: ${errorText}`);
+    throw new Error(`Salesforce Token Request Rejected: ${await response.text()}`);
   }
 
   const tokenData = await response.json();
@@ -69,80 +76,78 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'HTTP Method unsupported' });
   }
 
-  let transport = null;
-  let mcpClient = null;
-
   try {
-    // Step 1: Secure a live user identity context token
-    const sfAccessToken = await getSalesforceUserToken();
-
-    // Step 2: Establish the foundational MCP Client Transport connection over SSE
-    transport = new SSEClientTransport(new URL(process.env.SALESFORCE_MCP_URL), {
-      requestInit: {
-        headers: {
-          'Authorization': `Bearer ${sfAccessToken}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    });
-
-    mcpClient = new Client({
-      name: "vercel-mcp-client-bridge",
-      version: "1.0.0"
-    }, { capabilities: {} });
-
-    // Open communication tunnel to the remote Salesforce API Gateway
-    await mcpClient.connect(transport);
-
-    // Step 3: Map your active custom Apex classes dynamically into a Gemini-readable tool structure
-    const salesforceGeminiTool = await mcpToTool(mcpClient);
-
-    // Step 4: Initialize the core Google Gen AI Client SDK configuration
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
+    // Step 2: Run prompt reasoning with our static functional schema framework
     const aiResponse = await ai.models.generateContent({
       model: 'gemini-2.5-flash', 
       contents: req.body.message,
       config: {
         systemInstruction: `You are an operational flight reservation coordinator agent. 
-        You have absolute access to the user's secure CRM data through the connected Salesforce Invocable Actions MCP Server.
+        You have direct access to run custom actions. If the user asks for flights, look for the date criteria and immediately invoke 'GetPastOrUpcomingTripsAction'.
         
         CRITICAL DATE PARSING INSTRUCTIONS:
-        When processing human date requests, extract the specific intent and strictly pass it into the 'dateFilter' variable as one of these alphanumeric keywords:
+        Extract the human intent window and pass it to the parameter array:
         - "Flights today" -> TODAY
         - "Trips next month" -> NEXT_MONTH
-        - "This upcoming weekend" -> WEEKEND
-        
-        Always translate raw record structures (Name, Price__c, FlightId__c) back into conversational, friendly summaries for the webpage UI layout. Do not stop at explaining what you are searching; retrieve the data using your tools and present the final list.`,
-        
-        tools: [salesforceGeminiTool]
+        - "This upcoming weekend" -> WEEKEND`,
+        tools: [salesforceFlightTool]
       }
     });
 
-    // Clean up connections immediately to eliminate Vercel runtime resource exhaustion logs
-    await mcpClient.close();
+    // Step 3: Check if Gemini isolated a requirement to query your CRM database
+    const call = aiResponse.functionCalls?.[0] || aiResponse?.candidates?.[0]?.content?.parts?.[0]?.functionCall;
 
-    // Step 5: Safe object-drilling response parser to eliminate front-end 'undefined' errors
-    let responsePayloadString = "";
+    if (call && call.name === "GetPastOrUpcomingTripsAction") {
+      const targetFilter = call.args.dateFilter || "NEXT_MONTH";
 
-    if (aiResponse && aiResponse.text) {
-      responsePayloadString = aiResponse.text;
-    } else if (aiResponse?.candidates?.[0]?.content?.parts?.[0]?.text) {
-      responsePayloadString = aiResponse.candidates[0].content.parts[0].text;
-    } else {
-      responsePayloadString = "Search execution cleared cleanly, but no flight records matching that specific date criteria window were found under your user account profile layout.";
+      // Secure our dynamic user identity context token
+      const sfAccessToken = await getSalesforceUserToken();
+
+      // Step 4: Execute a direct, highly optimized POST request using a strict JSON-RPC structure
+      const mcpResponse = await fetch(process.env.SALESFORCE_MCP_URL, {
+        method: 'POST', 
+        headers: {
+          'Authorization': `Bearer ${sfAccessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            name: "GetPastOrUpcomingTripsAction",
+            arguments: { dateFilter: targetFilter }
+          },
+          id: 1
+        })
+      });
+
+      if (!mcpResponse.ok) {
+        return res.status(200).json({ reply: `Connected to Salesforce gateway, but the target custom class threw an internal exception: ${mcpResponse.statusText}` });
+      }
+
+      const mcpData = await mcpResponse.json();
+      
+      // Step 5: Feed the direct Salesforce record result back into Gemini for conversational output
+      const finalResponse = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: [
+          { role: 'user', parts: [{ text: req.body.message }] },
+          { role: 'model', parts: [{ functionCall: call }] },
+          { role: 'user', parts: [{ text: `Tool result payload data: ${JSON.stringify(mcpData)}` }] }
+        ]
+      });
+
+      return res.status(200).json({ reply: finalResponse.text || "Flight database data found, but layout parsing dropped." });
     }
 
-    return res.status(200).json({ reply: responsePayloadString });
+    // Default conversational response if no functional lookup was triggered
+    return res.status(200).json({ reply: aiResponse.text || "No actionable request isolated." });
 
   } catch (error) {
-    console.error("Serverless Operational Crash: ", error.message);
-    
-    // Explicit clean fallback check if the gateway faults before closing the protocol client
-    if (mcpClient) {
-      try { await mcpClient.close(); } catch (_) {}
-    }
-    
-    return res.status(500).json({ error: `Internal Engine Execution Failure: ${error.message}` });
+    console.error("Crash Tracking System Log:", error.message);
+    // Returning a clean object to the frontend prevents 'undefined' message banners
+    return res.status(200).json({ reply: `System encounter error during execution: ${error.message}` });
   }
 }
