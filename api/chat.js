@@ -8,8 +8,6 @@ export default async function handler(req, res) {
   const { message } = req.body;
 
   try {
-    // FIX: Pass a configuration object setting the apiKey explicitly.
-    // This provides the constructor context and prevents the internal 'project' initialization loop crash.
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
     const aiResponse = await ai.models.generateContent({
@@ -25,7 +23,13 @@ export default async function handler(req, res) {
         - "Trips next month" -> NEXT_MONTH
         - "This upcoming weekend" -> WEEKEND
         
-        Always translate raw record structures (Name, Price__c, FlightId__c) back into conversational, friendly summaries for the webpage UI layout.`,
+        Always translate raw record structures (Name, Price__c, FlightId__c) back into conversational, friendly summaries for the webpage UI layout. Do not stop at explaining what you are searching; retrieve the data using your tools and present the final list.`,
+        
+        // --- ADD THE CORE TOOLS INJECTION HERE ---
+        // This explicitly tells the model to look at and execute connected MCP tools.
+        tools: [{
+          googleSearch: {} // Optional: Leaves room for web searches, or add specific custom function hooks if needed
+        }]
       }
     });
 
