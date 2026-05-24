@@ -25,11 +25,15 @@ export default async function handler(req, res) {
         
         Always translate raw record structures (Name, Price__c, FlightId__c) back into conversational, friendly summaries for the webpage UI layout. Do not stop at explaining what you are searching; retrieve the data using your tools and present the final list.`,
         
-        // --- ADD THE CORE TOOLS INJECTION HERE ---
-        // This explicitly tells the model to look at and execute connected MCP tools.
-        tools: [{
-          googleSearch: {} // Optional: Leaves room for web searches, or add specific custom function hooks if needed
-        }]
+        // --- FIXED: Inject your live Salesforce Hosted MCP Server ---
+        tools: [
+          {
+            // This instructs the Gemini client to connect to your remote Salesforce MCP instance over Server-Sent Events (SSE)
+            mcp: {
+              url: process.env.SALESFORCE_MCP_URL
+            }
+          }
+        ]
       }
     });
 
