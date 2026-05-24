@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Flight Agent Pod</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 h-screen flex flex-col justify-between">
+
+    <header class="bg-slate-800 p-4 border-b border-slate-700 shadow-xl">
+        <h1 class="text-lg font-bold tracking-wide text-blue-400">Gemini Native MCP Testbed</h1>
+    </header>
+
+    <main class="flex-1 overflow-y-auto p-4 space-y-4" id="chat-viewport">
+        <div class="bg-slate-800 border border-slate-700 p-3 rounded-lg max-w-xl">
+            <p class="text-sm"><strong>Gemini Agent:</strong> System initialized. I have complete access to your Salesforce Apex logic. How can I filter your flight bookings today?</p>
+        </div>
+    </main>
+
+    <footer class="p-4 bg-slate-800 border-t border-slate-700 flex gap-3">
+        <input type="text" id="user-prompt" placeholder="Ask: 'Show me my flights for next month'..." class="flex-1 bg-slate-950 border border-slate-700 p-3 rounded-lg focus:outline-none focus:border-blue-500 text-slate-100 placeholder-slate-500">
+        <button onclick="dispatchPrompt()" class="bg-blue-600 font-semibold px-6 py-3 rounded-lg hover:bg-blue-500 transition-colors text-white shadow-md">Send</button>
+    </footer>
+
+    <script>
+        async function dispatchPrompt() {
+            const inputElement = document.getElementById('user-prompt');
+            const viewport = document.getElementById('chat-viewport');
+            const queryText = inputElement.value.trim();
+            if(!queryText) return;
+
+            // Display User Message Box
+            viewport.innerHTML += `<div class="bg-blue-900/50 border border-blue-700 p-3 rounded-lg max-w-xl ml-auto text-right"><p class="text-sm"><strong>You:</strong> ${queryText}</p></div>`;
+            inputElement.value = '';
+            viewport.scrollTop = viewport.scrollHeight;
+
+            try {
+                const networkResponse = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: queryText })
+                });
+                const payloadData = await networkResponse.json();
+                
+                // Append Gemini's Response Context
+                viewport.innerHTML += `<div class="bg-slate-800 border border-slate-700 p-3 rounded-lg max-w-xl"><p class="text-sm text-slate-300"><strong>Gemini Agent:</strong> ${payloadData.reply}</p></div>`;
+            } catch (err) {
+                viewport.innerHTML += `<div class="bg-red-950/50 border border-red-700 p-3 rounded-lg max-w-xl text-red-400"><p class="text-sm">System Connection Timeout.</p></div>`;
+            }
+            viewport.scrollTop = viewport.scrollHeight;
+        }
+    </script>
+</body>
+</html>
