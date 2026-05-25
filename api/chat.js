@@ -1,6 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
 
-// 1. Pure Model Context Protocol (MCP) Static Tool Schema Representation
 const salesforceFlightTool = {
   functionDeclarations: [
     {
@@ -20,15 +19,10 @@ const salesforceFlightTool = {
   ]
 };
 
-/**
- * Uses a securely stored Refresh Token to mint a live, user-scoped 
- * Salesforce Access Token on the fly via standard OAuth 2.0.
- */
 async function getSalesforceUserToken() {
   const consumerKey = process.env.SF_CONSUMER_KEY;
-  const refreshToken = process.env.SF_REFRESH_TOKEN; // Pulled from your Vercel Environment Variables
+  const refreshToken = process.env.SF_REFRESH_TOKEN; 
   
-  // Clean the base URL to prevent double-appending suffixes
   let baseUrl = process.env.SF_DOMAIN.trim().replace(/\/$/, '');
   if (!baseUrl.startsWith('http')) {
     baseUrl = `https://${baseUrl}`;
@@ -47,7 +41,7 @@ async function getSalesforceUserToken() {
   });
 
   if (!response.ok) {
-    throw new Error(`Salesforce Refresh Token Rejected: ${await response.text()}`);
+    throw new Error(`OAuth Rejected: ${await response.text()}`);
   }
 
   const tokenData = await response.json();
@@ -59,21 +53,13 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'HTTP Method unsupported' });
   }
 
+  // --- THE TRACER BULLET ---
+  let executionStep = "Initializing Container Environment";
+
   try {
-    // --- DIAGNOSTIC TRAP START ---
-    const rawMcpUrl = process.env.SALESFORCE_MCP_URL;
-    const rawDomain = process.env.SF_DOMAIN;
-    
-    if (!rawMcpUrl || rawMcpUrl.trim() === "") {
-        return res.status(200).json({ reply: "CRITICAL CRASH: Vercel cannot see the SALESFORCE_MCP_URL environment variable. It is undefined." });
-    }
-    if (!rawDomain || rawDomain.trim() === "") {
-        return res.status(200).json({ reply: "CRITICAL CRASH: Vercel cannot see the SF_DOMAIN environment variable. It is undefined." });
-    }
-    // --- DIAGNOSTIC TRAP END ---
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    // Step 2: Prompt reasoning with our functional framework schema
+    executionStep = "Network Call 1: Gemini Intent Parsing";
     const aiResponse = await ai.models.generateContent({
       model: 'gemini-2.5-flash', 
       contents: req.body.message,
@@ -94,20 +80,23 @@ export default async function handler(req, res) {
 
     if (call && call.name === "GetPastOrUpcomingTripsAction") {
       const targetFilter = call.args.dateFilter || "NEXT_MONTH";
+      
+      executionStep = "Network Call 2: Minting Salesforce OAuth PKCE Token";
       const sfAccessToken = await getSalesforceUserToken();
 
-      // Step 4: The MCP Initialization Handshake
       let mcpEndpoint = process.env.SALESFORCE_MCP_URL || "";
       mcpEndpoint = mcpEndpoint.trim();
       if (!mcpEndpoint.startsWith('http')) {
         mcpEndpoint = `https://${mcpEndpoint}`;
       }
+      
+      executionStep = `Network Call 3: MCP Handshake to URL (${mcpEndpoint})`;
       const initResponse = await fetch(mcpEndpoint, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${sfAccessToken}`,
           'Content-Type': 'application/json',
-          'Accept': 'application/json, text/event-stream' // Required to avoid 406 errors
+          'Accept': 'application/json, text/event-stream' 
         },
         body: JSON.stringify({
           jsonrpc: "2.0",
@@ -125,28 +114,25 @@ export default async function handler(req, res) {
         return res.status(200).json({ reply: `MCP Initialization Failed: ${await initResponse.text()}` });
       }
 
-      // Step 4.2: Extract the critical Session ID from the response headers
       const mcpSessionId = initResponse.headers.get('mcp-session-id');
-      
       if (!mcpSessionId) {
         return res.status(200).json({ reply: "MCP Gateway did not return a session ID header." });
       }
 
-      // Step 4.3: Execute the Tool Call using the isolated Session ID
+      executionStep = `Network Call 4: MCP JSON-RPC Tool Execution (Session ID: ${mcpSessionId})`;
       const mcpResponse = await fetch(mcpEndpoint, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${sfAccessToken}`,
           'Content-Type': 'application/json',
           'Accept': 'application/json',
-          'mcp-session-id': mcpSessionId // CRITICAL: This links the atomic call to the established session
+          'mcp-session-id': mcpSessionId 
         },
         body: JSON.stringify({
           jsonrpc: "2.0",
           method: "tools/call",
           params: {
             name: "GetPastOrUpcomingTripsAction",
-            // Ensuring strict camelCase matching for Invocable Variables
             arguments: { 
               dateFilter: targetFilter,
               isPastTrip: false,
@@ -163,7 +149,7 @@ export default async function handler(req, res) {
 
       const mcpData = await mcpResponse.json();
       
-      // Step 5: Feed the pure MCP response data payload back to Gemini for conversational layout rendering
+      executionStep = "Network Call 5: Gemini Final Summarization";
       const finalResponse = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: [
@@ -179,7 +165,8 @@ export default async function handler(req, res) {
     return res.status(200).json({ reply: aiResponse.text || "No actionable request isolated." });
 
   } catch (error) {
-    console.error("MCP Protocol Operational Fault:", error.message);
-    return res.status(200).json({ reply: `MCP Protocol Execution Error: ${error.message}` });
+    // We now return EXACTLY where the crash happened
+    console.error(`Crash at [${executionStep}]:`, error.message);
+    return res.status(200).json({ reply: `CRITICAL CRASH at [${executionStep}] — Error Details: ${error.message}` });
   }
 }
