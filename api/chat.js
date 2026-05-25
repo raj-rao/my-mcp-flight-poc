@@ -1,5 +1,4 @@
 import { GoogleGenAI } from '@google/genai';
-import crypto from 'crypto';
 
 // 1. Pure Model Context Protocol (MCP) Static Tool Schema Representation
 const salesforceFlightTool = {
