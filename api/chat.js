@@ -29,8 +29,11 @@ async function getSalesforceUserToken() {
   const consumerKey = process.env.SF_CONSUMER_KEY;
   const refreshToken = process.env.SF_REFRESH_TOKEN; // Pulled from your Vercel Environment Variables
   
-  // Clean the domain string for the standard API login route
-  let domain = process.env.SF_DOMAIN.trim().replace(/^https?:\/\//, '').replace(/\.my\.salesforce-setup\.com\/?$/, '');
+  // Clean the base URL to prevent double-appending suffixes
+  let baseUrl = process.env.SF_DOMAIN.trim().replace(/\/$/, '');
+  if (!baseUrl.startsWith('http')) {
+    baseUrl = `https://${baseUrl}`;
+  }
 
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
@@ -38,7 +41,7 @@ async function getSalesforceUserToken() {
     refresh_token: refreshToken
   });
 
-  const response = await fetch(`https://${domain}.my.salesforce.com/services/oauth2/token`, {
+  const response = await fetch(`${baseUrl}/services/oauth2/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: params
