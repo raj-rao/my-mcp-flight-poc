@@ -119,13 +119,11 @@ export default async function handler(req, res) {
           params: {
             name: "GetPastOrUpcomingTripsAction",
             arguments: { 
-              inputRecords: [
-                {
-                  dateFilter: targetFilter,
-                  isPastTrip: false,
-                  bookingNumber: ""
-                }
-              ]
+              input: {
+                dateFilter: targetFilter,
+                isPastTrip: false,
+                bookingNumber: ""
+              }
             }
           },
           id: 1
