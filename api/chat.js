@@ -26,16 +26,22 @@ const salesforceFlightTool = {
  */
 async function getSalesforceUserToken() {
   const consumerKey = (process.env.SF_CONSUMER_KEY || "").trim();
-  const consumerSecret = (process.env.SF_CONSUMER_SECRET || "").trim(); // <-- Inhales the new secret
+  const consumerSecret = (process.env.SF_CONSUMER_SECRET || "").trim(); 
   const refreshToken = (process.env.SF_REFRESH_TOKEN || "").trim();
   
-  // Use the universal global gateway to bypass instance-level DNS routing crashes
-  const tokenUrl = "https://login.salesforce.com/services/oauth2/token";
+  // Bring back the aggressive Domain sanitizer to hit your specific orgfarm instance
+  let rawDomain = (process.env.SF_DOMAIN || "").replace(/['"]/g, '').trim().replace(/\/$/, '');
+  if (!rawDomain.startsWith('http')) {
+    rawDomain = `https://${rawDomain}`;
+  }
+
+  // Route specifically to the isolated Agentforce environment, not the global gateway
+  const tokenUrl = `${rawDomain}/services/oauth2/token`;
 
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
     client_id: consumerKey,
-    client_secret: consumerSecret, // <-- Fulfills the strict OAuth contract safely
+    client_secret: consumerSecret, // Keep the required secret
     refresh_token: refreshToken
   });
 
@@ -46,13 +52,12 @@ async function getSalesforceUserToken() {
   });
 
   if (!response.ok) {
-    throw new Error(`OAuth Rejected: ${await response.text()}`);
+    throw new Error(`OAuth Rejected by Instance: ${await response.text()}`);
   }
 
   const tokenData = await response.json();
   return tokenData.access_token;
 }
-
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'HTTP Method unsupported' });
