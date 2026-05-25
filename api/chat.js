@@ -111,6 +111,7 @@ export default async function handler(req, res) {
       // Connect to the Salesforce hosted MCP Server using the official SDK Transport Layer
       transport = new SSEClientTransport(new URL(process.env.SALESFORCE_MCP_URL), {
         requestInit: {
+          method: 'POST', 
           headers: {
             'Authorization': `Bearer ${sfAccessToken}`,
             'Content-Type': 'application/json'
