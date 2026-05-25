@@ -95,10 +95,8 @@ export default async function handler(req, res) {
       executionStep = "Network Call 2: Minting Salesforce OAuth PKCE Token";
       
       // BYPASS: Comment out the OAuth fetch
-      // const sfAccessToken = await getSalesforceUserToken();
+      const sfAccessToken = await getSalesforceUserToken();
       
-      // BYPASS: Paste your LIVE Access Token from the CLI (Starts with 00D...)
-      const sfAccessToken = "PASTE_YOUR_00D_ACCESS_TOKEN_HERE";
 
       // Sanitize the MCP Gateway URL to prevent Node.js network crashes
       let mcpEndpoint = (process.env.SALESFORCE_MCP_URL || "").replace(/['"]/g, '').trim();
