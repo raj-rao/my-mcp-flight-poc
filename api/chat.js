@@ -14,8 +14,8 @@ export default async function handler(req, res) {
         'Authorization': `Bearer ${sfAccessToken}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json, text/event-stream',
-        'User-Agent': 'Vercel-MCP-Bridge/1.0',
-        'Origin': 'https://api.salesforce.com'
+        'User-Agent': 'Salesforce-MCP-Client/1.0',
+        'Origin': 'https://orgfarm-3a128dc78e-dev-ed.develop.my.salesforce.com' // Match your Org URL exactly
       },
       body: JSON.stringify({
         jsonrpc: "2.0", 
