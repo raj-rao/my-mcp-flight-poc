@@ -18,8 +18,17 @@ export default async function handler(req, res) {
         'Origin': 'https://api.salesforce.com'
       },
       body: JSON.stringify({
-        jsonrpc: "2.0", method: "initialize", id: 1,
-        params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "test-bridge", version: "1.0.0" } }
+        jsonrpc: "2.0", 
+        method: "initialize", 
+        id: 1,
+        params: { 
+          protocolVersion: "2024-11-05", 
+          capabilities: {}, 
+          clientInfo: { 
+            name: "Salesforce-MCP-Client", // Matches the expected internal client naming
+            version: "1.0.0" 
+          } 
+        }
       })
     });
 
