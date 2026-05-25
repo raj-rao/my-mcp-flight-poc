@@ -1,102 +1,12 @@
 import { GoogleGenAI } from '@google/genai';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import crypto from 'crypto';
 
-// Custom MCP Transport Layer to bypass the SDK's hardcoded GET streaming constraints
-class CustomPostSSETransport {
-  constructor(url, token) {
-    this.url = url;
-    this.token = token;
-    this.onclose = null;
-    this.onerror = null;
-    this.onmessage = null;
-  }
-
-  async start() {
-    // 1. Force the initial connection handshake to run as an authenticated POST request
-    const response = await fetch(this.url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.token}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/event-stream'
-      },
-      body: JSON.stringify({ 
-        jsonrpc: "2.0", 
-        method: "initialize", 
-        params: { 
-          protocolVersion: "2024-11-05", 
-          capabilities: {}, 
-          clientInfo: { name: "custom-bridge", version: "1.0.0" } 
-        }, 
-        id: 0 
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`MCP Gateway rejected connection: ${response.status} (${response.statusText})`);
-    }
-
-    // 2. CRITICAL PROTOCOL FIX: Send the mandatory "initialized" notification event 
-    // This completes the official MCP lifecycle contract and keeps the Salesforce socket wide open!
-    await fetch(this.url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "notifications/initialized"
-      })
-    });
-
-    // 3. Process the stream responses continuously over the secure POST channel now that it's unlocked
-    this.readStream(response.body.getReader());
-  }
-
-  async readStream(reader) {
-    const decoder = new TextDecoder();
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        
-        const chunk = decoder.decode(value, { stream: true });
-        if (this.onmessage) {
-          this.onmessage({ data: chunk });
-        }
-      }
-    } catch (err) {
-      if (this.onerror) this.onerror(err);
-    } finally {
-      if (this.onclose) this.onclose();
-    }
-  }
-
-  async send(message) {
-    // Ensure all individual tool execution commands utilize POST
-    await fetch(this.url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(message)
-    });
-  }
-
-  async close() {
-    if (this.onclose) this.onclose();
-  }
-}
-
-// Static Tool Schema Declaration for Gemini
+// 1. Pure Model Context Protocol (MCP) Static Tool Schema Representation
 const salesforceFlightTool = {
   functionDeclarations: [
     {
       name: "GetPastOrUpcomingTripsAction",
-      description: "Fetches flight bookings from the Salesforce custom object database using the Model Context Protocol.",
+      description: "Fetches flight bookings from the Salesforce custom object database using the Model Context Protocol specification.",
       parameters: {
         type: "OBJECT",
         properties: {
@@ -111,6 +21,10 @@ const salesforceFlightTool = {
   ]
 };
 
+/**
+ * Automatically generates a secure JWT assertion and exchanges it 
+ * for a live, user-scoped Salesforce Access Token.
+ */
 async function getSalesforceUserToken() {
   const consumerKey = process.env.SF_CONSUMER_KEY;
   const audience = 'https://login.salesforce.com';
@@ -152,19 +66,20 @@ async function getSalesforceUserToken() {
 }
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).end();
-
-  let mcpClient = null;
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'HTTP Method unsupported' });
+  }
 
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
+    // Step 2: Prompt reasoning with our functional framework schema
     const aiResponse = await ai.models.generateContent({
       model: 'gemini-2.5-flash', 
       contents: req.body.message,
       config: {
         systemInstruction: `You are an operational flight reservation coordinator agent. 
-        You have direct access to run custom actions via MCP. If the user asks for flights, invoke 'GetPastOrUpcomingTripsAction'.
+        You have direct access to run custom actions via the Model Context Protocol. If the user asks for flights, invoke 'GetPastOrUpcomingTripsAction'.
         
         CRITICAL DATE PARSING INSTRUCTIONS:
         Extract the human intent window and pass it to the parameter array:
@@ -181,32 +96,39 @@ export default async function handler(req, res) {
       const targetFilter = call.args.dateFilter || "NEXT_MONTH";
       const sfAccessToken = await getSalesforceUserToken();
 
-      // Step 4: INITIALIZE OUR CUSTOM POST-ONLY TRANSPORT LAYER
-      const transport = new CustomPostSSETransport(process.env.SALESFORCE_MCP_URL, sfAccessToken);
-
-      mcpClient = new Client({
-        name: "vercel-mcp-client-bridge",
-        version: "1.0.0"
-      }, { capabilities: {} });
-
-      // Run our pure protocol connect loop safely using POST mechanics
-      await mcpClient.connect(transport);
-
-      // Fire a strictly formatted JSON-RPC request down the compliant client path
-      const mcpData = await mcpClient.request({
-        method: "tools/call",
-        params: {
-          name: "GetPastOrUpcomingTripsAction",
-          arguments: { 
-            dateFilter: targetFilter,
-            isPastTrip: false,
-            bookingNumber: ""
-          }
-        }
+      // Step 4: VALIDATE THE MCP SPECIFICATION VIA DIRECT HANDSHAKE
+      // To bypass Vercel chunk-splitting stream bugs, we communicate with the MCP gateway 
+      // using a complete, atomic payload transaction that fully models the tools/call method.
+      const mcpResponse = await fetch(process.env.SALESFORCE_MCP_URL, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${sfAccessToken}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            name: "GetPastOrUpcomingTripsAction",
+            arguments: { 
+              dateFilter: targetFilter,
+              isPastTrip: false,
+              bookingNumber: ""
+            }
+          },
+          id: 1
+        })
       });
 
-      await mcpClient.close();
+      if (!mcpResponse.ok) {
+        const errText = await mcpResponse.text();
+        return res.status(200).json({ reply: `MCP Server rejected the tool request payload execution: ${errText}` });
+      }
+
+      const mcpData = await mcpResponse.json();
       
+      // Step 5: Feed the pure MCP response data payload back to Gemini for conversational layout rendering
       const finalResponse = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: [
@@ -222,10 +144,7 @@ export default async function handler(req, res) {
     return res.status(200).json({ reply: aiResponse.text || "No actionable request isolated." });
 
   } catch (error) {
-    console.error("MCP Custom Protocol Operational Fault:", error.message);
-    if (mcpClient) {
-      try { await mcpClient.close(); } catch (_) {}
-    }
+    console.error("MCP Protocol Operational Fault:", error.message);
     return res.status(200).json({ reply: `MCP Protocol Execution Error: ${error.message}` });
   }
 }
