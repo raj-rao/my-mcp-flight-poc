@@ -118,7 +118,11 @@ export default async function handler(req, res) {
           method: "tools/call",
           params: {
             name: "GetPastOrUpcomingTripsAction",
-            arguments: { dateFilter: targetFilter }
+            arguments: { 
+              dateFilter: targetFilter,
+              isPastTrip: false,
+              bookingNumber: ""
+            }
           },
           id: 1
         })
