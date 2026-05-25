@@ -31,7 +31,7 @@ async function getSalesforceUserToken() {
   const audience = 'https://login.salesforce.com';
   
   // Ensure this matches your login username string inside your Salesforce Org farm profile
-  const username = 'rajrao104-3972@dev.org'; 
+  const username = 'rajrao104.e195a8a1a260@agentforce.com'; 
 
   const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
   const claimSet = Buffer.from(JSON.stringify({
