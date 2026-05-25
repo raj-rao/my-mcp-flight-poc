@@ -1,9 +1,74 @@
 import { GoogleGenAI } from '@google/genai';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import crypto from 'crypto';
 
-// 1. Static Tool Schema Declaration for Gemini's Intent Processing
+// Custom MCP Transport Layer to bypass the SDK's hardcoded GET streaming constraints
+class CustomPostSSETransport {
+  constructor(url, token) {
+    this.url = url;
+    this.token = token;
+    this.onclose = null;
+    this.onerror = null;
+    this.onmessage = null;
+  }
+
+  async start() {
+    // Force the initial connection handshake to run as an authenticated POST request
+    const response = await fetch(this.url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/event-stream'
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "custom-bridge", version: "1.0.0" } }, id: 0 })
+    });
+
+    if (!response.ok) {
+      throw new Error(`MCP Gateway rejected connection: ${response.status} (${response.statusText})`);
+    }
+
+    // Process the stream responses continuously over the secure POST channel
+    this.readStream(response.body.getReader());
+  }
+
+  async readStream(reader) {
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value, { stream: true });
+        if (this.onmessage) {
+          this.onmessage({ data: chunk });
+        }
+      }
+    } catch (err) {
+      if (this.onerror) this.onerror(err);
+    } finally {
+      if (this.onclose) this.onclose();
+    }
+  }
+
+  async send(message) {
+    // Ensure all individual tool execution commands utilize POST
+    await fetch(this.url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(message)
+    });
+  }
+
+  async close() {
+    if (this.onclose) this.onclose();
+  }
+}
+
+// Static Tool Schema Declaration for Gemini
 const salesforceFlightTool = {
   functionDeclarations: [
     {
@@ -23,10 +88,6 @@ const salesforceFlightTool = {
   ]
 };
 
-/**
- * Automatically generates a secure JWT assertion and exchanges it 
- * for a live, user-scoped Salesforce Access Token.
- */
 async function getSalesforceUserToken() {
   const consumerKey = process.env.SF_CONSUMER_KEY;
   const audience = 'https://login.salesforce.com';
@@ -67,27 +128,20 @@ async function getSalesforceUserToken() {
   return tokenData.access_token;
 }
 
-/**
- * Main Vercel serverless function route orchestrator using pure MCP Protocol Client
- */
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'HTTP Method unsupported' });
-  }
+  if (req.method !== 'POST') return res.status(405).end();
 
-  let transport = null;
   let mcpClient = null;
 
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    // Step 2: Prompt reasoning with our static functional schema framework
     const aiResponse = await ai.models.generateContent({
       model: 'gemini-2.5-flash', 
       contents: req.body.message,
       config: {
         systemInstruction: `You are an operational flight reservation coordinator agent. 
-        You have direct access to run custom actions. If the user asks for flights, look for the date criteria and immediately invoke 'GetPastOrUpcomingTripsAction'.
+        You have direct access to run custom actions via MCP. If the user asks for flights, invoke 'GetPastOrUpcomingTripsAction'.
         
         CRITICAL DATE PARSING INSTRUCTIONS:
         Extract the human intent window and pass it to the parameter array:
@@ -98,35 +152,24 @@ export default async function handler(req, res) {
       }
     });
 
-    // Step 3: Check if Gemini isolated a requirement to query your CRM database via MCP
     const call = aiResponse.functionCalls?.[0] || aiResponse?.candidates?.[0]?.content?.parts?.[0]?.functionCall;
 
     if (call && call.name === "GetPastOrUpcomingTripsAction") {
       const targetFilter = call.args.dateFilter || "NEXT_MONTH";
-
-      // Secure our dynamic user identity context token
       const sfAccessToken = await getSalesforceUserToken();
 
-      // Step 4: TRUE MCP PROTOCOL EXECUTION
-      // Connect to the Salesforce hosted MCP Server using the official SDK Transport Layer
-      transport = new SSEClientTransport(new URL(process.env.SALESFORCE_MCP_URL), {
-        requestInit: {
-          method: 'POST', 
-          headers: {
-            'Authorization': `Bearer ${sfAccessToken}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      });
+      // Step 4: INITIALIZE OUR CUSTOM POST-ONLY TRANSPORT LAYER
+      const transport = new CustomPostSSETransport(process.env.SALESFORCE_MCP_URL, sfAccessToken);
 
       mcpClient = new Client({
         name: "vercel-mcp-client-bridge",
         version: "1.0.0"
       }, { capabilities: {} });
 
+      // Run our pure protocol connect loop safely using POST mechanics
       await mcpClient.connect(transport);
 
-      // Execute the tool call strictly adhering to the official Model Context Protocol standard
+      // Fire a strictly formatted JSON-RPC request down the compliant client path
       const mcpData = await mcpClient.request({
         method: "tools/call",
         params: {
@@ -139,10 +182,8 @@ export default async function handler(req, res) {
         }
       });
 
-      // Clean up connection immediately
       await mcpClient.close();
       
-      // Step 5: Feed the pure MCP server response back into Gemini for conversational output
       const finalResponse = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: [
@@ -158,12 +199,10 @@ export default async function handler(req, res) {
     return res.status(200).json({ reply: aiResponse.text || "No actionable request isolated." });
 
   } catch (error) {
-    console.error("MCP Protocol Operational Fault:", error.message);
-    
+    console.error("MCP Custom Protocol Operational Fault:", error.message);
     if (mcpClient) {
       try { await mcpClient.close(); } catch (_) {}
     }
-    
     return res.status(200).json({ reply: `MCP Protocol Execution Error: ${error.message}` });
   }
 }
