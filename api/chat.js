@@ -110,7 +110,8 @@ export default async function handler(req, res) {
         method: 'POST', 
         headers: {
           'Authorization': `Bearer ${sfAccessToken}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/event-stream'
         },
         body: JSON.stringify({
           jsonrpc: "2.0",
