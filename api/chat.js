@@ -60,6 +60,17 @@ export default async function handler(req, res) {
   }
 
   try {
+    // --- DIAGNOSTIC TRAP START ---
+    const rawMcpUrl = process.env.SALESFORCE_MCP_URL;
+    const rawDomain = process.env.SF_DOMAIN;
+    
+    if (!rawMcpUrl || rawMcpUrl.trim() === "") {
+        return res.status(200).json({ reply: "CRITICAL CRASH: Vercel cannot see the SALESFORCE_MCP_URL environment variable. It is undefined." });
+    }
+    if (!rawDomain || rawDomain.trim() === "") {
+        return res.status(200).json({ reply: "CRITICAL CRASH: Vercel cannot see the SF_DOMAIN environment variable. It is undefined." });
+    }
+    // --- DIAGNOSTIC TRAP END ---
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
     // Step 2: Prompt reasoning with our functional framework schema
