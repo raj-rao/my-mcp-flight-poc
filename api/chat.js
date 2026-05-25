@@ -22,43 +22,30 @@ const salesforceFlightTool = {
 };
 
 /**
- * Automatically generates a secure JWT assertion and exchanges it 
- * for a live, user-scoped Salesforce Access Token.
+ * Uses a securely stored Refresh Token to mint a live, user-scoped 
+ * Salesforce Access Token on the fly via standard OAuth 2.0.
  */
 async function getSalesforceUserToken() {
   const consumerKey = process.env.SF_CONSUMER_KEY;
-  const audience = 'https://login.salesforce.com';
-  const username = 'rajrao104.e195a8a1a260@agentforce.com'; 
-
-  const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
-  const claimSet = Buffer.from(JSON.stringify({
-    iss: consumerKey,
-    sub: username,
-    aud: audience,
-    exp: Math.floor(Date.now() / 1000) + 180 
-  })).toString('base64url');
-
-  const signInput = `${header}.${claimSet}`;
-  const privateKey = process.env.SF_PRIVATE_KEY.replace(/\\n/g, '\n'); 
-  const signer = crypto.createSign('RSA-SHA256');
-  signer.update(signInput);
-  const signature = signer.sign(privateKey, 'base64url');
-
-  const params = new URLSearchParams({
-    grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-    assertion: `${signInput}.${signature}`
-  });
-
+  const refreshToken = process.env.SF_REFRESH_TOKEN; // Pulled from your Vercel Environment Variables
+  
+  // Clean the domain string for the standard API login route
   let domain = process.env.SF_DOMAIN.trim().replace(/^https?:\/\//, '').replace(/\.my\.salesforce-setup\.com\/?$/, '');
 
-  const response = await fetch(`https://${domain}.my.salesforce-setup.com/services/oauth2/token`, {
+  const params = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: consumerKey,
+    refresh_token: refreshToken
+  });
+
+  const response = await fetch(`https://${domain}.my.salesforce.com/services/oauth2/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: params
   });
 
   if (!response.ok) {
-    throw new Error(`Salesforce Token Request Rejected: ${await response.text()}`);
+    throw new Error(`Salesforce Refresh Token Rejected: ${await response.text()}`);
   }
 
   const tokenData = await response.json();
@@ -96,34 +83,64 @@ export default async function handler(req, res) {
       const targetFilter = call.args.dateFilter || "NEXT_MONTH";
       const sfAccessToken = await getSalesforceUserToken();
 
-      // Step 4: VALIDATE THE MCP SPECIFICATION VIA DIRECT HANDSHAKE
-      // To bypass Vercel chunk-splitting stream bugs, we communicate with the MCP gateway 
-      // using a complete, atomic payload transaction that fully models the tools/call method.
+      // Step 4: The MCP Initialization Handshake
+      const initResponse = await fetch(process.env.SALESFORCE_MCP_URL, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${sfAccessToken}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/event-stream' // Required to avoid 406 errors
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "initialize",
+          params: { 
+            protocolVersion: "2024-11-05", 
+            capabilities: {}, 
+            clientInfo: { name: "vercel-mcp-bridge", version: "1.0.0" } 
+          },
+          id: 1
+        })
+      });
+
+      if (!initResponse.ok) {
+        return res.status(200).json({ reply: `MCP Initialization Failed: ${await initResponse.text()}` });
+      }
+
+      // Step 4.2: Extract the critical Session ID from the response headers
+      const mcpSessionId = initResponse.headers.get('mcp-session-id');
+      
+      if (!mcpSessionId) {
+        return res.status(200).json({ reply: "MCP Gateway did not return a session ID header." });
+      }
+
+      // Step 4.3: Execute the Tool Call using the isolated Session ID
       const mcpResponse = await fetch(process.env.SALESFORCE_MCP_URL, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${sfAccessToken}`,
           'Content-Type': 'application/json',
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          'mcp-session-id': mcpSessionId // CRITICAL: This links the atomic call to the established session
         },
         body: JSON.stringify({
           jsonrpc: "2.0",
           method: "tools/call",
           params: {
             name: "GetPastOrUpcomingTripsAction",
+            // Ensuring strict camelCase matching for Invocable Variables
             arguments: { 
               dateFilter: targetFilter,
               isPastTrip: false,
               bookingNumber: ""
             }
           },
-          id: 1
+          id: 2
         })
       });
 
       if (!mcpResponse.ok) {
-        const errText = await mcpResponse.text();
-        return res.status(200).json({ reply: `MCP Server rejected the tool request payload execution: ${errText}` });
+        return res.status(200).json({ reply: `MCP Server rejected the tool request: ${await mcpResponse.text()}` });
       }
 
       const mcpData = await mcpResponse.json();
