@@ -110,7 +110,9 @@ export default async function handler(req, res) {
         headers: {
           'Authorization': `Bearer ${sfAccessToken}`,
           'Content-Type': 'application/json',
-          'Accept': 'application/json, text/event-stream' // Required to avoid 406 Not Acceptable
+          'Accept': 'application/json, text/event-stream',
+          'User-Agent': 'Vercel-MCP-Bridge/1.0', // <-- Added to satisfy Gateway security
+          'Origin': 'https://api.salesforce.com'  // <-- Added to satisfy Gateway CORS
         },
         body: JSON.stringify({
           jsonrpc: "2.0",
