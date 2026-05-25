@@ -13,7 +13,7 @@ class CustomPostSSETransport {
   }
 
   async start() {
-    // Force the initial connection handshake to run as an authenticated POST request
+    // 1. Force the initial connection handshake to run as an authenticated POST request
     const response = await fetch(this.url, {
       method: 'POST',
       headers: {
@@ -21,14 +21,37 @@ class CustomPostSSETransport {
         'Content-Type': 'application/json',
         'Accept': 'application/json, text/event-stream'
       },
-      body: JSON.stringify({ jsonrpc: "2.0", method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "custom-bridge", version: "1.0.0" } }, id: 0 })
+      body: JSON.stringify({ 
+        jsonrpc: "2.0", 
+        method: "initialize", 
+        params: { 
+          protocolVersion: "2024-11-05", 
+          capabilities: {}, 
+          clientInfo: { name: "custom-bridge", version: "1.0.0" } 
+        }, 
+        id: 0 
+      })
     });
 
     if (!response.ok) {
       throw new Error(`MCP Gateway rejected connection: ${response.status} (${response.statusText})`);
     }
 
-    // Process the stream responses continuously over the secure POST channel
+    // 2. CRITICAL PROTOCOL FIX: Send the mandatory "initialized" notification event 
+    // This completes the official MCP lifecycle contract and keeps the Salesforce socket wide open!
+    await fetch(this.url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/initialized"
+      })
+    });
+
+    // 3. Process the stream responses continuously over the secure POST channel now that it's unlocked
     this.readStream(response.body.getReader());
   }
 
