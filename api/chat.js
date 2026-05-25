@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 
+// 1. Pure Model Context Protocol (MCP) Static Tool Schema Representation
 const salesforceFlightTool = {
   functionDeclarations: [
     {
@@ -10,7 +11,7 @@ const salesforceFlightTool = {
         properties: {
           dateFilter: {
             type: "STRING",
-            description: "Alphanumeric filter keyword mapping the target timeline execution criteria window. Accepted values: TODAY, NEXT_MONTH, WEEKEND."
+            description: "Intent: TODAY, TOMORROW, WEEKEND, LAST_MONTH, NEXT_MONTH, RANGE, NONE"
           }
         },
         required: ["dateFilter"]
@@ -19,25 +20,35 @@ const salesforceFlightTool = {
   ]
 };
 
+/**
+ * Uses a securely stored Refresh Token to mint a live, user-scoped 
+ * Salesforce Access Token on the fly via standard OAuth 2.0 PKCE.
+ */
 async function getSalesforceUserToken() {
-  const consumerKey = process.env.SF_CONSUMER_KEY;
-  const refreshToken = process.env.SF_REFRESH_TOKEN; 
+  // Aggressively trim hidden whitespace or line breaks from the Vercel variables
+  const consumerKey = (process.env.SF_CONSUMER_KEY || "").trim();
+  const refreshToken = (process.env.SF_REFRESH_TOKEN || "").trim();
   
-  let baseUrl = process.env.SF_DOMAIN.trim().replace(/\/$/, '');
-  if (!baseUrl.startsWith('http')) {
-    baseUrl = `https://${baseUrl}`;
+  // THE ULTIMATE SANITIZER: Strip all quotes, spaces, and trailing slashes
+  let rawDomain = (process.env.SF_DOMAIN || "").replace(/['"]/g, '').trim().replace(/\/$/, '');
+  
+  if (!rawDomain.startsWith('http')) {
+    rawDomain = `https://${rawDomain}`;
   }
 
+  const tokenUrl = `${rawDomain}/services/oauth2/token`;
+
+  // Safely stringify the body parameters for older Node.js fetch engines
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
     client_id: consumerKey,
     refresh_token: refreshToken
   });
 
-  const response = await fetch(`${baseUrl}/services/oauth2/token`, {
+  const response = await fetch(tokenUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: params
+    body: params.toString() 
   });
 
   if (!response.ok) {
@@ -53,7 +64,8 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'HTTP Method unsupported' });
   }
 
-  // --- THE TRACER BULLET ---
+  // --- EXECUTION TRACER ---
+  // Tracks exactly where the container is during processing for pinpoint debugging
   let executionStep = "Initializing Container Environment";
 
   try {
@@ -84,8 +96,8 @@ export default async function handler(req, res) {
       executionStep = "Network Call 2: Minting Salesforce OAuth PKCE Token";
       const sfAccessToken = await getSalesforceUserToken();
 
-      let mcpEndpoint = process.env.SALESFORCE_MCP_URL || "";
-      mcpEndpoint = mcpEndpoint.trim();
+      // Sanitize the MCP Gateway URL to prevent Node.js network crashes
+      let mcpEndpoint = (process.env.SALESFORCE_MCP_URL || "").replace(/['"]/g, '').trim();
       if (!mcpEndpoint.startsWith('http')) {
         mcpEndpoint = `https://${mcpEndpoint}`;
       }
@@ -96,7 +108,7 @@ export default async function handler(req, res) {
         headers: {
           'Authorization': `Bearer ${sfAccessToken}`,
           'Content-Type': 'application/json',
-          'Accept': 'application/json, text/event-stream' 
+          'Accept': 'application/json, text/event-stream' // Required to avoid 406 Not Acceptable
         },
         body: JSON.stringify({
           jsonrpc: "2.0",
@@ -126,7 +138,7 @@ export default async function handler(req, res) {
           'Authorization': `Bearer ${sfAccessToken}`,
           'Content-Type': 'application/json',
           'Accept': 'application/json',
-          'mcp-session-id': mcpSessionId 
+          'mcp-session-id': mcpSessionId // Links the atomic call to the established session
         },
         body: JSON.stringify({
           jsonrpc: "2.0",
@@ -134,9 +146,14 @@ export default async function handler(req, res) {
           params: {
             name: "GetPastOrUpcomingTripsAction",
             arguments: { 
-              dateFilter: targetFilter,
-              isPastTrip: false,
-              bookingNumber: ""
+              // CRITICAL SCHEMA FIX: Wrapping parameters inside the expected invocable 'inputs' array
+              inputs: [
+                {
+                  dateFilter: targetFilter,
+                  isPastTrip: false,
+                  bookingNumber: ""
+                }
+              ]
             }
           },
           id: 2
@@ -165,7 +182,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ reply: aiResponse.text || "No actionable request isolated." });
 
   } catch (error) {
-    // We now return EXACTLY where the crash happened
     console.error(`Crash at [${executionStep}]:`, error.message);
     return res.status(200).json({ reply: `CRITICAL CRASH at [${executionStep}] — Error Details: ${error.message}` });
   }
