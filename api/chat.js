@@ -87,7 +87,12 @@ export default async function handler(req, res) {
       const sfAccessToken = await getSalesforceUserToken();
 
       // Step 4: The MCP Initialization Handshake
-      const initResponse = await fetch(process.env.SALESFORCE_MCP_URL, {
+      let mcpEndpoint = process.env.SALESFORCE_MCP_URL || "";
+      mcpEndpoint = mcpEndpoint.trim();
+      if (!mcpEndpoint.startsWith('http')) {
+        mcpEndpoint = `https://${mcpEndpoint}`;
+      }
+      const initResponse = await fetch(mcpEndpoint, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${sfAccessToken}`,
@@ -118,7 +123,7 @@ export default async function handler(req, res) {
       }
 
       // Step 4.3: Execute the Tool Call using the isolated Session ID
-      const mcpResponse = await fetch(process.env.SALESFORCE_MCP_URL, {
+      const mcpResponse = await fetch(mcpEndpoint, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${sfAccessToken}`,
