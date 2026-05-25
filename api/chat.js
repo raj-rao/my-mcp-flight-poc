@@ -25,26 +25,17 @@ const salesforceFlightTool = {
  * Salesforce Access Token on the fly via standard OAuth 2.0 PKCE.
  */
 async function getSalesforceUserToken() {
-  // 1. Paste your exact Consumer Key (Client ID) inside the quotes
-  const consumerKey = "3MVG9GCMQoQ6rpzTnQRA30JDD6RdyBjocF0KA89CwWttn0PWiYgCqAyQV.gHbLG.Fq6B72sXxLRKtFkG4rdNE";
+  const consumerKey = (process.env.SF_CONSUMER_KEY || "").trim();
+  const consumerSecret = (process.env.SF_CONSUMER_SECRET || "").trim(); // <-- Inhales the new secret
+  const refreshToken = (process.env.SF_REFRESH_TOKEN || "").trim();
   
-  // 2. Paste your exact Refresh Token inside the quotes
-  const refreshToken = "3c591f9b70be98594a3d8232baa2151c5fbe00f4341e807b2051f82811af0aefa5b5c9db1e1592b0555702bb41e312e249647f1f5e2be00a6a9026c91654af2b854c5fd22a349f8550ec87d06366dc34b921fca1f0ad24209afed02e76:20847807435703ab7bb085d2297ff14c";
-  
-  // 3. Paste your exact Domain inside the quotes (e.g., https://orgfarm-3a128dc78e-dev-ed.develop.my.salesforce.com)
-  let rawDomain = "https://orgfarm-3a128dc78e-dev-ed.develop.my.salesforce.com";
-  
-  // The rest of the logic remains untouched
-  rawDomain = rawDomain.replace(/['"]/g, '').trim().replace(/\/$/, '');
-  if (!rawDomain.startsWith('http')) {
-    rawDomain = `https://${rawDomain}`;
-  }
-
-  const tokenUrl = `${rawDomain}/services/oauth2/token`;
+  // Use the universal global gateway to bypass instance-level DNS routing crashes
+  const tokenUrl = "https://login.salesforce.com/services/oauth2/token";
 
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
     client_id: consumerKey,
+    client_secret: consumerSecret, // <-- Fulfills the strict OAuth contract safely
     refresh_token: refreshToken
   });
 
@@ -61,7 +52,6 @@ async function getSalesforceUserToken() {
   const tokenData = await response.json();
   return tokenData.access_token;
 }
-
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
